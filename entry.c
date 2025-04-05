@@ -3,49 +3,51 @@
 #include <time.h>
 #include <Windows.h>
 
-#define LEARNING_RATE 0.05f
+#define LEARNING_RATE 0.02f
+#define VERIFY_BATCH 10000
+short mark[VERIFY_BATCH] = { 0 };
 
 typedef struct _hid1
 {
     short eachCellInputSize;
     short cellsCount;
-    float w[512][784];
-    float bias[512];
+    float w[256][784];
+    float bias[256];
     void (*activate)(IN float[], IN SIZE_T, IN OUT float (*)[]);
-    float z[512];
-    float out[512];
-    float error[512];
+    float z[256];
+    float out[256];
+    float error[256];
 }HID1, * PHID1;
 
 typedef struct _hid2
 {
     short eachCellInputSize;
     short cellsCount;
-    float w[768][512];
-    float bias[768];
+    float w[512][256];
+    float bias[512];
     void (*activate)(IN float[], IN SIZE_T, IN OUT float (*)[]);
-    float z[768];
-    float out[768];
-    float error[768];
+    float z[512];
+    float out[512];
+    float error[512];
 }HID2, * PHID2;
 
 typedef struct _hid3
 {
     short eachCellInputSize;
     short cellsCount;
-    float w[64][768];
-    float bias[64];
+    float w[16][512];
+    float bias[16];
     void (*activate)(IN float[], IN SIZE_T, IN OUT float (*)[]);
-    float z[64];
-    float out[64];
-    float error[64];
+    float z[16];
+    float out[16];
+    float error[16];
 }HID3, * PHID3;
 
 typedef struct _out
 {
     short eachCellInputSize;
     short cellsCount;
-    float w[10][64];
+    float w[10][16];
     float bias[10];
     void (*activate)(IN float[], IN SIZE_T, IN OUT float (*)[]);
     float z[10];
@@ -82,6 +84,20 @@ void ReLU(
     for (size_t j = 0; j < size; j++)
     {
         (*out)[j] = (z[j] >= 0.0f) ? z[j] : 0.0f;
+    }
+
+    return;
+}
+
+void lekyReLU(
+    IN float z[],
+    IN SIZE_T size,
+    IN OUT float (*out)[]
+)
+{
+    for (size_t j = 0; j < size; j++)
+    {
+        (*out)[j] = (z[j] >= 0.0f) ? z[j] : -0.001f * z[j];
     }
 
     return;
@@ -128,8 +144,8 @@ void initializeNet(
     srand((unsigned int)time(NULL));
 
     (*hid1)->eachCellInputSize = 784;
-    (*hid1)->cellsCount = 512;
-    (*hid1)->activate = &ReLU;
+    (*hid1)->cellsCount = 256;
+    (*hid1)->activate = &lekyReLU;
     for (size_t j = 0; j < (*hid1)->cellsCount; j++)
     {
         for (size_t i = 0; i < (*hid1)->eachCellInputSize; i++)
@@ -140,8 +156,8 @@ void initializeNet(
     }
 
     (*hid2)->eachCellInputSize = (*hid1)->cellsCount;
-    (*hid2)->cellsCount = 768;
-    (*hid2)->activate = &ReLU;
+    (*hid2)->cellsCount = 512;
+    (*hid2)->activate = &lekyReLU;
     for (size_t j = 0; j < (*hid2)->cellsCount; j++)
     {
         for (size_t i = 0; i < (*hid2)->eachCellInputSize; i++)
@@ -152,8 +168,8 @@ void initializeNet(
     }
 
     (*hid3)->eachCellInputSize = (*hid2)->cellsCount;
-    (*hid3)->cellsCount = 64;
-    (*hid3)->activate = &ReLU;
+    (*hid3)->cellsCount = 16;
+    (*hid3)->activate = &lekyReLU;
     for (size_t j = 0; j < (*hid3)->cellsCount; j++)
     {
         for (size_t i = 0; i < (*hid3)->eachCellInputSize; i++)
@@ -265,11 +281,40 @@ void backward(
         if ((*out)->out[j] > maxOutput)
         {
             maxOutput = (*out)->out[j];
-            predictedLabel = j;
+            predictedLabel = (int)j;
         }
     }
 
-    printf("Epoch: %zu\tLabel: %d\tPredicted: %d\tLoss: %.6f\tDiffer: %d\tConfidence: %f%%\n", epoch, (int)label, predictedLabel, loss, (int)label - (int)predictedLabel, loss < 1.0f ? (1.0f - loss) * 100.0f : 0.0f);
+    if (predictedLabel == (int)label)
+    {
+        mark[epoch % VERIFY_BATCH] = 1;
+    }
+    else
+    {
+        mark[epoch % VERIFY_BATCH] = 0;
+    }
+    printf("Epoch: %zu\tLabel: %d\tPredicted: %d\tLoss: %.6f\tDiffer: %d\tAI Confidence: %f%%\n", epoch, (int)label, predictedLabel, loss, ((int)label - (int)predictedLabel) >= 0?(-((int)label - (int)predictedLabel)): (int)label - (int)predictedLabel, loss < 1.0f ? (1.0f - loss) * 100.0f : 0.0f);
+
+    if (epoch % VERIFY_BATCH == 0)
+    {
+        int good = 0;
+        for (size_t j = 0; j < VERIFY_BATCH; j++)
+        {
+            if (mark[j] == 1)
+            {
+                good++;
+            }
+        }
+        if (epoch <= 50000)
+        {
+            printf("》》》》》》》》》》》》%zu次预测正确率：%lf%%\n", (size_t)VERIFY_BATCH, ((double)good / (double)VERIFY_BATCH) * 100);
+        }
+        else
+        {
+            printf("》》》》》》》》》》》》%zu次预测正确率：%lf%%\n", (size_t)VERIFY_BATCH, ((double)good / (double)VERIFY_BATCH) * 100);
+            Sleep(50);
+        }
+    }
 
     for (size_t j = 0; j < (*hid3)->cellsCount; j++)
     {
@@ -278,7 +323,7 @@ void backward(
         {
             temp += (*out)->error[i] * (*out)->w[i][j];
         }
-        (*hid3)->error[j] = ((*hid3)->z[j] >= 0.0f) ? temp : 0.0f;
+        (*hid3)->error[j] = ((*hid3)->z[j] >= 0.0f) ? 1.0f * temp : -0.001f * temp;
         //printf("(*hid3)->error[%zu]: %f\n", j, (*hid3)->error[j]);
     }
 
@@ -289,7 +334,7 @@ void backward(
         {
             temp += (*hid3)->error[i] * (*hid3)->w[i][j];
         }
-        (*hid2)->error[j] = ((*hid2)->z[j] >= 0.0f) ? temp : 0.0f;
+        (*hid2)->error[j] = ((*hid2)->z[j] >= 0.0f) ? 1.0f * temp : -0.001f * temp;
         //printf("(*hid2)->error[%zu]: %f\n", j, (*hid2)->error[j]);
     }
 
@@ -300,7 +345,7 @@ void backward(
         {
             temp += (*hid2)->error[i] * (*hid2)->w[i][j];
         }
-        (*hid1)->error[j] = ((*hid1)->z[j] >= 0.0f) ? temp : 0.0f;
+        (*hid1)->error[j] = ((*hid1)->z[j] >= 0.0f) ? 1.0f * temp : -0.001f * temp;
         //printf("(*hid1)->error[%zu]: %f\n", j, (*hid1)->error[j]);
     }
 
@@ -399,7 +444,7 @@ int main(void)
 
     initializeNet(&hid1, &hid2, &hid3, &outl);
 
-    for (size_t epoch = 0; epoch < 1; epoch++)
+    for (size_t epoch = 0; epoch < trainNums * 20; epoch++)
     {
         forward(&hid1, &hid2, &hid3, &outl, trainSetData[epoch % trainNums]);
         backward(&hid1, &hid2, &hid3, &outl, epoch, trainSetData[epoch % trainNums], trainLabelData[epoch % trainNums]);
